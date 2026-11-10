@@ -41,3 +41,17 @@ Expected: HTTP 429 and `The system is busy. Please try again later.` Existing wo
 ## Stop and clean
 
 `docker compose down` keeps data. `docker compose down -v` removes the project database and stored audio and cannot be undone.
+
+## Transcription regression tests
+
+Run `python -m unittest discover -s transcription_service/tests -v` from the repository root.
+These isolated tests use doubles for external packages and unfinished shared infrastructure;
+they do not verify RabbitMQ, PostgreSQL, or real Whisper integration.
+The smoke test expects DONE and has a 600-second deadline. Set EXPECTED_STATUS=PARTLY_DONE
+for intentional degradation and SMOKE_TIMEOUT_SECONDS to adjust the deadline.
+
+Transcription deadlines are soft: threads are drained before files or concurrency slots are
+released. A permanently hung model requires restarting the worker container.
+Malformed events are preserved in the DLQ. Infrastructure failures are requeued without
+consuming processing retries. Audio retrieval failures use bounded retries. Segment events require job_id, object_name, nonnegative integer
+segment_number/start_ms/end_ms, end_ms greater than start_ms, and positive finite audio_seconds.

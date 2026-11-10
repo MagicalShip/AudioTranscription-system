@@ -81,7 +81,9 @@ async def retry_or_dead_letter(
     payload: dict[str, Any],
 ) -> bool:
     """Return True when republished for retry, False when sent to the DLQ."""
-    attempt = int((message.headers or {}).get("retry_count", 0))
+    attempt = (message.headers or {}).get('retry_count', 0)
+    if type(attempt) is not int or attempt < 0:
+        attempt = MAX_RETRIES
     if attempt < MAX_RETRIES:
         await asyncio.sleep(RETRY_BASE_SECONDS * (2**attempt))
         await publish(
@@ -103,3 +105,12 @@ async def retry_or_dead_letter(
     )
     return False
 
+
+async def dead_letter_invalid(channel, message, queue_name: str, reason: str) -> None:
+    """Preserve malformed input for inspection without decoding it again."""
+    exchange = await channel.get_exchange(DLX_EXCHANGE)
+    copy = Message(message.body, delivery_mode=DeliveryMode.PERSISTENT,
+                   content_type=message.content_type,
+                   headers={'validation_error': reason},
+                   correlation_id=message.correlation_id, message_id=message.message_id)
+    await exchange.publish(copy, routing_key=queue_name)

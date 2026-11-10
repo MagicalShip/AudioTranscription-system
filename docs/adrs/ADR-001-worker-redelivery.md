@@ -20,3 +20,11 @@ Yokoi, Yuki will use RabbitMQ at-least-once delivery. A consumer acknowledges on
 - A crash before the database commit may repeat one model call. This is acceptable under the zero-money-cost constraint, but can consume up to one extra segment's CPU time.
 - Delivery remains at least once, so downstream consumers also require idempotency. Job Service already provides a unique segment key and event inbox; this adds two small tables rather than an exactly-once coordinator.
 - The design is simpler than distributed transactions, fitting a four-person student team, but duplicate events remain visible in RabbitMQ metrics.
+
+## Implementation clarification
+
+After an insert conflict, publish the stored result rather than the losing computation.
+Validate messages before processing; preserve malformed input in the DLQ and explicitly
+requeue infrastructure failures. Audio retrieval and model failures consume the bounded retry budget.
+Model initialization is serialized. Thread deadlines retain files and concurrency slots
+until inference exits; these are soft deadlines, not forced termination.
