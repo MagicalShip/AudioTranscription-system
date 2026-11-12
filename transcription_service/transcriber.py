@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 
@@ -9,6 +10,7 @@ class Transcriber:
         self.provider = os.getenv("TRANSCRIPTION_PROVIDER", "simulated")
         self.model_name = os.getenv("WHISPER_MODEL", "base")
         self._model = None
+        self._model_lock = threading.Lock()
 
     @property
     def model_version(self) -> str:
@@ -26,18 +28,19 @@ class Transcriber:
             return f"Simulated English transcript for segment {segment_number}."
         if self.provider != "faster_whisper":
             raise ValueError(f"Unknown transcription provider: {self.provider}")
-        if self._model is None:
-            try:
-                from faster_whisper import WhisperModel
-            except ImportError as exc:
-                raise RuntimeError(
-                    "faster-whisper is not installed; build with INSTALL_LOCAL_AI=true"
-                ) from exc
-            self._model = WhisperModel(
-                self.model_name,
-                device=os.getenv("WHISPER_DEVICE", "cpu"),
-                compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"),
-            )
+        with self._model_lock:
+            if self._model is None:
+                try:
+                    from faster_whisper import WhisperModel
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "faster-whisper is not installed; build with INSTALL_LOCAL_AI=true"
+                    ) from exc
+                self._model = WhisperModel(
+                    self.model_name,
+                    device=os.getenv("WHISPER_DEVICE", "cpu"),
+                    compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"),
+                )
         segments, _ = self._model.transcribe(
             str(path),
             language="en",

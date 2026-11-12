@@ -1,5 +1,88 @@
 from __future__ import annotations
 
+@app.get("/health")
+def health():
+    return {"status": "ok", "service": "job-service"}
+
+
+@app.post("/jobs", status_code=202)
+async def create_job(
+    request: Request,
+    file: UploadFile = File(...),
+    source_language: str = Form("en"),
+    target_language: str = Form("zh"),
+):
+    if (source_language, target_language) != ("en", "zh"):
+        raise HTTPException(400, "The assessed version supports English to Chinese only")
+    filename = Path(file.filename or "audio").name
+    extension = Path(filename).suffix.lower()
+    if extension not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, f"Supported formats: {sorted(ALLOWED_EXTENSIONS)}")
+    active = await asyncio.to_thread(active_job_count)
+    ACTIVE_JOBS.set(active)
+    if active >= MAX_ACTIVE_JOBS:
+        raise HTTPException(429, "The system is busy. Please try again later.")
+
+    job_id = str(uuid4())
+    object_name = f"source/{job_id}/{filename}"
+    size = 0
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as temp:
+            temp_path = temp.name
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, "Audio file exceeds the 200 MB limit")
+                temp.write(chunk)
+        await asyncio.to_thread(
+            upload_file,
+            request.app.state.storage,
+            object_name,
+            temp_path,
+            file.content_type or "application/octet-stream",
+        )
+        await asyncio.to_thread(
+            insert_job,
+            {
+                "id": job_id,
+                "filename": filename,
+                "source_language": source_language,
+                "target_language": target_language,
+                "object_name": object_name,
+            },
+        )
+        JOBS_CREATED.inc()
+        ACTIVE_JOBS.set(active + 1)
+        return {"job_id": job_id, "status": "QUEUED", "message": "File accepted for processing"}
+    finally:
+        if temp_path:
+            Path(temp_path).unlink(missing_ok=True)
+
+
+@app.get("/jobs/{job_id}")
+async def read_job(job_id: str):
+    job = await asyncio.to_thread(get_job, job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return job
+
+
+@app.get("/jobs/{job_id}/segments")
+async def read_segments(job_id: str):
+    if not await asyncio.to_thread(get_job, job_id):
+        raise HTTPException(404, "Job not found")
+    return await asyncio.to_thread(get_segments, job_id)
+
+
+@app.post("/jobs/{job_id}/retry-translation", status_code=202)
+async def retry_translation(job_id: str):
+    if not await asyncio.to_thread(queue_translation_retry, job_id):
+        raise HTTPException(409, "No completed transcript is available")
+    return {"job_id": job_id, "status": "TRANSLATING"}
+
+
+@app.get("/", response_class=HTMLResponse)
 def index():
     return """
 <!doctype html>
